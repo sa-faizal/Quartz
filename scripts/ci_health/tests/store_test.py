@@ -44,6 +44,19 @@ def run(attempt, conclusion):
     }
 
 
+@pytest.mark.parametrize("conclusion", ["startup_failure", "action_required"])
+def test_attention_outcomes_are_counted_consistently_in_summary_and_recovery(
+    tmp_path, conclusion
+):
+    with HealthStore(tmp_path / "health.sqlite") as store:
+        store.ingest_run(run(1, conclusion))
+        exported = store.export()
+        assert exported["summary"]["failed_runs"] == 1
+        assert exported["trends"]["daily_runs"][0]["failed_runs"] == 1
+        store.ingest_run(run(2, "success"))
+        assert store.export()["summary"]["recovered_runs"] == 1
+
+
 def test_changed_release_is_preserved_and_same_snapshot_is_idempotent(tmp_path):
     with HealthStore(tmp_path / "health.sqlite") as store:
         document = release(status="in_progress")
