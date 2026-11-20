@@ -30,6 +30,17 @@ new ROCm nightlies or prereleases, see
 contains, the available endpoints, how to poll it, and a copy-paste example
 GitHub Actions workflow.
 
+## CI health extension in this fork
+
+This fork adds a durable, attempt-aware CI health collector and a dashboard
+that reads only the resulting Quartz feed. It includes workflow/job evidence,
+release history, attributed JUnit reports, retry recovery, missing-data coverage
+and a maintainer-authorized downstream-report importer. This extension is
+separate from the upstream services marked planned above.
+
+See [the health feed guide](docs/ci-health/README.md) for setup, scheduling,
+reporting and limits, and [the dashboard](dashboard/README.md) for its consumer.
+
 ## Contributing
 
 **Open your pull requests against `develop`, not `main`.** See

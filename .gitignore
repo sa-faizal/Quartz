@@ -13,3 +13,6 @@ __pycache__/
 
 # virtual envs
 .venv*/
+
+# CI health collection state is published separately on ci-health-data.
+health-state/

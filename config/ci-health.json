@@ -1,0 +1,18 @@
+{
+  "repos": ["ROCm/TheRock", "ROCm/rockrel"],
+  "release_repo": "ROCm/rockrel",
+  "release_sources": [
+    "https://raw.githubusercontent.com/ROCm/Quartz/main/nightly/latest.json",
+    "https://raw.githubusercontent.com/ROCm/Quartz/main/nightly-bkc/latest.json",
+    "https://raw.githubusercontent.com/ROCm/Quartz/main/prerelease/latest.json"
+  ],
+  "days": 14,
+  "history_days": 7,
+  "max_runs": 50,
+  "max_attempts": 5,
+  "max_correlated_runs": 25,
+  "max_requests": 500,
+  "max_artifacts": 3,
+  "include_artifacts": true,
+  "stale_after_seconds": 7200
+}
