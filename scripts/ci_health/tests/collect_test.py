@@ -82,6 +82,163 @@ def test_paginated_jobs_and_exact_attempt_history():
     assert store.runs[1]["completed_at"] == "2026-11-19T02:00:00Z"
 
 
+def test_502_attempt_jobs_fallback_is_cached_and_never_mixes_attempts():
+    class Client:
+        def __init__(self):
+            self.all_job_calls = 0
+
+        def get(self, path):
+            if "jobs?filter=all" in path:
+                self.all_job_calls += 1
+                return {
+                    "jobs": [
+                        {"id": 101, "name": "old", "run_id": 10, "run_attempt": 1},
+                        {"id": 102, "name": "retry", "run_id": 10, "run_attempt": 2},
+                        {"id": 103, "name": "last", "run_id": 10, "run_attempt": 3},
+                    ]
+                }
+            if "/jobs?" in path:
+                if "/attempts/1/" in path:
+                    return {"jobs": [{"id": 101, "name": "old"}]}
+                raise CollectionError("GitHub HTTP 502")
+            if "/attempts/" in path:
+                return run(attempt=int(path.rsplit("/", 1)[-1]), conclusion="failure")
+            return {"workflow_runs": [run(attempt=3)]}
+
+    client = Client()
+    store = Store()
+    outcome = collect(
+        store, repos=["ROCm/rockrel"], release_sources=[], now=NOW, client=client
+    )
+    assert outcome["status"] == "success"
+    assert outcome["errors"] == []
+    assert client.all_job_calls == 1
+    assert [[job["id"] for job in record["jobs"]] for record in store.runs] == [
+        [101],
+        [102],
+        [103],
+    ]
+    assert [record["jobs_source"] for record in store.runs] == [
+        "attempt",
+        "all_jobs_filter_all",
+        "all_jobs_filter_all",
+    ]
+    assert all(record["jobs_complete"] for record in store.runs)
+    assert [item["run_attempt"] for item in outcome["job_fallbacks"]] == [2, 3]
+
+
+def test_jobs_fallback_paginates_all_attempts():
+    class Client:
+        def get(self, path):
+            if "jobs?filter=all" in path:
+                if "page=2" in path:
+                    return {"jobs": [{"id": 100, "run_id": 10, "run_attempt": 1}]}
+                return {
+                    "jobs": [
+                        {"id": i, "run_id": 10, "run_attempt": (i % 2) + 1}
+                        for i in range(100)
+                    ]
+                }
+            if "/jobs?" in path:
+                raise CollectionError("GitHub HTTP 502")
+            return {"workflow_runs": [run()]}
+
+    store = Store()
+    outcome = collect(
+        store, repos=["ROCm/rockrel"], release_sources=[], now=NOW, client=Client()
+    )
+    assert outcome["status"] == "success"
+    assert len(store.runs[0]["jobs"]) == 51
+    assert store.runs[0]["jobs_complete"] is True
+
+
+def test_jobs_fallback_requires_explicit_matching_run_and_attempt():
+    class Client:
+        def get(self, path):
+            if "jobs?filter=all" in path:
+                return {
+                    "jobs": [
+                        {"id": 1, "run_id": 10, "run_attempt": 1},
+                        {"id": 2, "run_id": 10},
+                        {"id": 3, "run_id": 11, "run_attempt": 1},
+                        {"id": 4, "run_id": 10, "run_attempt": 2},
+                    ]
+                }
+            if "/jobs?" in path:
+                raise CollectionError("GitHub HTTP 502")
+            return {"workflow_runs": [run()]}
+
+    store = Store()
+    outcome = collect(
+        store, repos=["ROCm/rockrel"], release_sources=[], now=NOW, client=Client()
+    )
+    assert outcome["status"] == "partial"
+    assert [job["id"] for job in store.runs[0]["jobs"]] == [1]
+    assert store.runs[0]["jobs_complete"] is False
+    assert any(w["stage"] == "jobs_fallback_provenance" for w in outcome["warnings"])
+
+
+def test_jobs_fallback_request_budget_and_failed_cache_are_bounded():
+    class Client:
+        def __init__(self):
+            self.all_job_calls = 0
+
+        def get(self, path):
+            if "jobs?filter=all" in path:
+                self.all_job_calls += 1
+                return {
+                    "jobs": [
+                        {"id": i, "run_id": 10, "run_attempt": 1} for i in range(100)
+                    ]
+                }
+            if "/jobs?" in path:
+                raise CollectionError("GitHub HTTP 502")
+            return {"workflow_runs": [run()]}
+
+    client = Client()
+    store = Store()
+    outcome = collect(
+        store,
+        repos=["ROCm/rockrel"],
+        release_sources=[],
+        now=NOW,
+        client=client,
+        max_requests=3,
+    )
+    assert outcome["status"] == "partial"
+    assert outcome["requests"] == 3
+    assert client.all_job_calls == 1
+    assert store.runs[0]["jobs_complete"] is False
+    assert outcome["job_fallbacks"][0]["complete"] is False
+    assert outcome["job_fallbacks"][0]["error"] == "Collection request budget exhausted"
+
+
+def test_failed_jobs_fallback_is_not_repeated_for_later_attempts():
+    class Client:
+        def __init__(self):
+            self.all_job_calls = 0
+
+        def get(self, path):
+            if "jobs?filter=all" in path:
+                self.all_job_calls += 1
+                raise CollectionError("GitHub HTTP 502")
+            if "/jobs?" in path:
+                raise CollectionError("GitHub HTTP 502")
+            if "/attempts/" in path:
+                return run(attempt=1, conclusion="failure")
+            return {"workflow_runs": [run(attempt=2)]}
+
+    client = Client()
+    store = Store()
+    outcome = collect(
+        store, repos=["ROCm/rockrel"], release_sources=[], now=NOW, client=client
+    )
+    assert client.all_job_calls == 1
+    assert outcome["status"] == "partial"
+    assert len(outcome["job_fallbacks"]) == 2
+    assert all(record["jobs_complete"] is False for record in store.runs)
+
+
 def test_partial_jobs_error_retains_failure_and_other_repo_collects():
     class Client:
         def get(self, path):
