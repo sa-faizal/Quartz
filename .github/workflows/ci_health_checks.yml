@@ -1,0 +1,36 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+
+name: CI health checks
+
+on:
+  push:
+    branches:
+      - develop
+      - 'users/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-test.txt black==25.11.0
+      - name: Check collector and importer
+        run: |
+          python -m pytest scripts/ci_health
+          python -m black --check scripts/ci_health
+      - name: Check dashboard model and syntax
+        run: |
+          node --test dashboard/health-model.test.mjs
+          node --check dashboard/app.mjs

@@ -1,0 +1,81 @@
+# Copyright Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: MIT
+
+name: Publish CI health
+
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-health-data
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    # This fork owns its data feed. Upstream can opt in with the repository var.
+    if: github.repository == 'sa-faizal/Quartz' || vars.CI_HEALTH_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Check out collector
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out persistent evidence
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ci-health-data
+          path: health-state
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Collect release, workflow and test evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set +e
+          python scripts/ci_health/cli.py --db health-state/health.sqlite collect \
+            --config config/ci-health.json --output health-state/health.json
+          result=$?
+          set -e
+          if [ "$result" -eq 2 ]; then
+            echo '::warning::Collection has gaps. Publishing the feed with explicit coverage errors.'
+          elif [ "$result" -ne 0 ]; then
+            exit "$result"
+          fi
+      - name: Publish Quartz consumer feed and history
+        working-directory: health-state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add health.json health.sqlite
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update Quartz CI health evidence'
+            gh auth setup-git
+            git push origin HEAD:ci-health-data
+          fi
+      - name: Summarize published evidence
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('health-state/health.json').read_text())
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('## Quartz CI health\n\n')
+              output.write('```json\n' + json.dumps(data['summary'], indent=2) + '\n```\n')
+              output.write('\nCollection gaps are included in the feed; missing evidence is not a pass.\n')
+          PY

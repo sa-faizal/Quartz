@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#14171d">
+    <meta name="description" content="ROCm CI health, release readiness and test evidence from Quartz.">
+    <title>ROCm CI Health · Quartz</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script type="module" src="./app.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to health dashboard</a>
+    <header class="masthead">
+      <a class="brand" href="./" aria-label="ROCm CI Health home">
+        <svg viewBox="0 0 28 28" aria-hidden="true"><path d="M2 2h24v24H16v-6h4V8H8v4H2z" fill="currentColor"/><path d="M2 16h10v10H2z" fill="currentColor"/></svg>
+        <span>AMD <strong>ROCm</strong></span>
+      </a>
+      <span class="product-name">Engineering intelligence</span>
+      <div class="masthead-links"><a href="https://github.com/sa-faizal/Quartz" target="_blank" rel="noopener noreferrer">Quartz repository</a><span class="live-label">QUARTZ DATA</span></div>
+    </header>
+    <div class="page-heading">
+      <div><p class="eyebrow">CONTINUOUS INTEGRATION</p><h1>The CI health story.</h1><p class="heading-description">From a build being available to knowing what passed, what broke, and where to look.</p></div>
+      <div class="heading-actions"><button id="refresh" class="primary-button" type="button">Refresh data</button><span id="last-loaded" class="muted">Waiting for Quartz</span></div>
+    </div>
+    <nav class="section-nav" aria-label="Dashboard sections"><a href="#overview">Overview</a><a href="#releases">Releases</a><a href="#workflow-runs">Workflow runs</a><a href="#test-evidence">Test evidence</a><a href="#downstream">Downstream</a><a href="#coverage">Coverage</a></nav>
+    <main id="main">
+      <section id="feed-state" aria-live="polite" aria-atomic="true" class="feed-state loading"><div class="state-icon" aria-hidden="true">◷</div><div><strong>Connecting to Quartz</strong><p>Loading the published CI health feed.</p></div></section>
+      <details class="source-settings"><summary>Data source and collection details <span id="source-status">Quartz health feed</span></summary><form id="source-form"><label for="source-url">Quartz health feed URL</label><div class="source-input-row"><input id="source-url" type="text" inputmode="url" spellcheck="false" autocomplete="off" aria-describedby="source-help"><button type="submit" class="secondary-button">Use feed</button><button id="reset-source" type="button" class="text-button">Reset</button></div><p id="source-help">All dashboard data comes from this Quartz JSON feed. No GitHub API token is used in your browser.</p><a id="raw-feed" target="_blank" rel="noopener noreferrer">Open feed</a></form></details>
+      <section id="overview" class="section-block"><div class="section-heading"><div><p class="eyebrow">THE CURRENT PICTURE</p><h2>Availability and confidence</h2></div><span class="scope-label">Within the collected window</span></div><div id="metrics" class="metric-grid"></div><div class="overview-grid"><article class="panel trend-panel"><div class="panel-heading"><div><h3>Workflow outcomes</h3><p>Latest recorded attempt per workflow run · by creation date</p></div><div class="chart-legend"><span class="legend-success">Success</span><span class="legend-failure">Failure</span><span class="legend-other">Other</span></div></div><div id="trend-chart"></div></article><article class="panel story-panel"><div class="panel-heading"><h3>What needs attention</h3><span class="small-label">EVIDENCE FIRST</span></div><div id="attention"></div></article></div></section>
+      <section id="releases" class="section-block"><div class="section-heading"><div><p class="eyebrow">RELEASE READINESS</p><h2>Builds and validation</h2><p>Artifact availability and test validation are separate signals.</p></div><span id="release-count" class="scope-label"></span></div><div id="release-list"></div></section>
+      <section id="workflow-runs" class="section-block"><div class="section-heading"><div><p class="eyebrow">FOLLOW THE EXECUTION</p><h2>Workflow runs</h2><p>Inspect jobs, attempts, runner details and source evidence.</p></div><span id="run-count" class="scope-label"></span></div><div class="filter-bar"><label>Repository<select id="repo-filter"><option value="">All repositories</option></select></label><label>Outcome<select id="outcome-filter"><option value="">All outcomes</option><option value="failure">Failed</option><option value="success">Succeeded</option><option value="running">In progress</option><option value="cancelled">Cancelled</option><option value="recovered">Recovered on retry</option></select></label><label>Trigger<select id="event-filter"><option value="">All triggers</option></select></label><label class="search-label">Search<input id="search-filter" type="search" placeholder="Workflow, branch, commit…"></label></div><div id="run-list" class="panel run-list"></div></section>
+      <section id="test-evidence" class="section-block"><div class="section-heading"><div><p class="eyebrow">BEYOND THE RED BADGE</p><h2>Test evidence</h2><p>Individual cases from collected JUnit reports, separate from Quartz matrix counters.</p></div><span id="test-count" class="scope-label"></span></div><div id="test-summary" class="test-summary"></div><div id="test-list" class="panel"></div></section>
+      <section id="downstream" class="section-block"><div class="section-heading"><div><p class="eyebrow">THE ECOSYSTEM VIEW</p><h2>Downstream compatibility</h2><p>Reported results pinned to the ROCm release they tested.</p></div></div><div id="downstream-list" class="panel"></div></section>
+      <section id="coverage" class="section-block"><div class="section-heading"><div><p class="eyebrow">KNOW THE LIMITS</p><h2>Collection and coverage</h2><p>Missing evidence is visible here. It is never treated as a passing result.</p></div></div><div id="coverage-details" class="panel coverage-panel"></div></section>
+    </main>
+    <footer><span><strong>QUARTZ</strong> / ROCm CI Health</span><span>Source evidence stays one click away.</span><a href="https://github.com/sa-faizal/Quartz/tree/users/sa-faizal/ci-health-hud/docs/ci-health" target="_blank" rel="noopener noreferrer">Collection documentation</a></footer>
+    <noscript><p class="noscript">Enable JavaScript to load the Quartz health feed. No telemetry or browser-side GitHub authentication is required.</p></noscript>
+  </body>
+</html>

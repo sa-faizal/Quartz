@@ -98,6 +98,9 @@ _EXCLUDED_WORKFLOWS = frozenset(
         "test_rocm_wheels.yml",
         # Quartz's own local plumbing (not a rock producer workflow).
         "bender.yml",
+        "ci_health.yml",
+        "ci_health_checks.yml",
+        "ingest_ci_health.yml",
         "sync_develop_to_main.yml",
         "pre_commit.yml",
         "security_scan_pr.yml",
