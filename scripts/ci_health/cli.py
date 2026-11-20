@@ -38,6 +38,7 @@ def _validate_config(config: dict) -> dict:
         ("max_requests", 1, 10000),
         ("max_artifacts", 1, 1000),
         ("stale_after_seconds", 0, 31_536_000),
+        ("export_limit", 1, 10000),
     ):
         if key in config:
             value = config[key]
@@ -79,7 +80,13 @@ def write_json(path: Path, document: dict) -> None:
             mode="w", encoding="utf-8", dir=path.parent, delete=False
         ) as handle:
             name = handle.name
-            json.dump(document, handle, ensure_ascii=False, indent=2, allow_nan=False)
+            json.dump(
+                document,
+                handle,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
             handle.write("\n")
         os.replace(name, path)
     finally:
@@ -110,6 +117,7 @@ def main(argv=None) -> int:
     )
     export_parser.add_argument("--output", type=Path, required=True)
     export_parser.add_argument("--stale-after-seconds", type=int, default=7200)
+    export_parser.add_argument("--max-records", type=int, default=200)
     ingest = sub.add_parser(
         "ingest-downstream",
         help="Validate and import a maintainer-reviewed downstream report",
@@ -172,7 +180,8 @@ def main(argv=None) -> int:
             write_json(
                 args.output,
                 store.export(
-                    stale_after_seconds=config.get("stale_after_seconds", 7200)
+                    stale_after_seconds=config.get("stale_after_seconds", 7200),
+                    max_records=config.get("export_limit", 200),
                 ),
             )
             print(json.dumps(outcome, indent=2))
@@ -220,7 +229,8 @@ def main(argv=None) -> int:
             write_json(
                 args.output,
                 store.export(
-                    stale_after_seconds=getattr(args, "stale_after_seconds", 7200)
+                    stale_after_seconds=getattr(args, "stale_after_seconds", 7200),
+                    max_records=getattr(args, "max_records", 200),
                 ),
             )
         return 0

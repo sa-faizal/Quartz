@@ -36,6 +36,20 @@ test. The outcome chart groups the latest attempt by UTC creation date and
 explicitly calls out missing dates. Source timestamps and collection gaps remain
 visible even when jobs are green.
 
+Each release also exposes a collapsible architecture/framework evidence table.
+The table traverses reported pipeline leaves, omits duplicate parent rollups when
+variants are present, and preserves Python/framework dimensions and run attempts.
+It initially displays 100 entries, with a control to reveal more. Workflow links
+use the matching collected run repository and attempt; where a run is not
+collected, they use the feed's `collection.release_repo` (default `ROCm/rockrel`).
+Platform-wide builds remain platform-wide. Last-green records are scoped to each
+release stream/build variant and the collected history. Missing last-green
+records are shown as unobserved, rather than inferred from successful builds.
+Overview counters prefer the feed's full durable `summary` totals. When detail
+lists are bounded, the dashboard labels exported subsets and lists each affected
+record type under collection/coverage. The outcome chart describes exported run
+details and does not imply complete daily CI coverage.
+
 Run the dependency-free model tests with Node.js 20 or newer:
 
 ```console

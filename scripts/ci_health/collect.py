@@ -327,6 +327,7 @@ def collect(
         "errors": [],
         "warnings": [],
         "repos": list(repos),
+        "release_repo": release_repo,
         "window_days": days,
         "window_basis": "workflow run creation time",
         "max_runs_per_repo": max_runs,
@@ -346,6 +347,7 @@ def collect(
         "requests": 0,
         "max_correlated_runs": max_correlated_runs,
         "max_artifacts_per_run": max_artifacts,
+        "job_fallbacks": [],
     }
 
     def problem(stage, identity, exc=None, *, warning=False):
@@ -405,13 +407,13 @@ def collect(
 
     page_completeness = {}
 
-    def pages(path, field, *, cap=None):
+    def pages(path, field, *, cap=None, page_size=100):
         page_completeness[path] = True
         values = []
         page = 1
         while page <= 100:
             separator = "&" if "?" in path else "?"
-            response = get(f"{path}{separator}per_page=100&page={page}")
+            response = get(f"{path}{separator}per_page={page_size}&page={page}")
             batch = response.get(field)
             if not isinstance(batch, list):
                 raise CollectionError(f"Missing {field} array")
@@ -426,7 +428,10 @@ def collect(
                     problem("limit", path, warning=True)
                 return values
             values.extend(batch)
-            if len(batch) < 100:
+            total = response.get("total_count")
+            if type(total) is int and len(values) >= total:
+                return values
+            if len(batch) < page_size:
                 return values
             page += 1
         page_completeness[path] = False
@@ -474,6 +479,76 @@ def collect(
         except Exception as exc:
             problem("release_run", f"{repo}/{run_id}", exc)
 
+    all_jobs_cache = {}
+
+    def fallback_jobs(repo, run_id, attempt):
+        """Recover an unavailable attempt endpoint without mixing attempts.
+
+        GitHub sometimes returns 502 for attempt-specific job listings while
+        filter=all works. Cache that bounded listing once per run. Its explicit
+        provenance is required for every returned job; absent/foreign metadata
+        leaves a coverage gap rather than guessing ownership from timestamps.
+        """
+        key = (repo, run_id)
+        path = f"/repos/{repo}/actions/runs/{run_id}/jobs?filter=all"
+        if key not in all_jobs_cache:
+            try:
+                jobs = pages(path, "jobs", page_size=25)
+                all_jobs_cache[key] = (jobs, page_completeness[path], None)
+            except Exception as exc:
+                all_jobs_cache[key] = ([], False, exc)
+        jobs, complete, error = all_jobs_cache[key]
+        if error is not None:
+            result["job_fallbacks"].append(
+                {
+                    "repo": repo,
+                    "run_id": run_id,
+                    "run_attempt": attempt,
+                    "source": "all_jobs_filter_all",
+                    "complete": False,
+                    "jobs": 0,
+                    "error": (
+                        str(error)
+                        if isinstance(error, CollectionError)
+                        else type(error).__name__
+                    ),
+                }
+            )
+            raise CollectionError("All-attempt job fallback unavailable") from error
+        exact = []
+        unproven = False
+        for job in jobs:
+            job_run_id = job.get("run_id")
+            job_attempt = job.get("run_attempt")
+            if (
+                type(job_run_id) is not int
+                or job_run_id != run_id
+                or type(job_attempt) is not int
+                or job_attempt < 1
+            ):
+                unproven = True
+                continue
+            if job_attempt == attempt:
+                exact.append(job)
+        if unproven:
+            problem(
+                "jobs_fallback_provenance",
+                f"{repo}/{run_id}/attempts/{attempt}",
+                warning=True,
+            )
+        complete = complete and not unproven
+        result["job_fallbacks"].append(
+            {
+                "repo": repo,
+                "run_id": run_id,
+                "run_attempt": attempt,
+                "source": "all_jobs_filter_all",
+                "complete": complete,
+                "jobs": len(exact),
+            }
+        )
+        return exact, complete
+
     for (repo, run_id), latest in selected.items():
         result["runs"] += 1
         try:
@@ -494,22 +569,31 @@ def collect(
                     # Never substitute the latest attempt's status for history.
                     run = {**run, "id": run_id, "run_attempt": attempt}
                     jobs_complete = True
+                    jobs_source = "attempt"
                     try:
                         jobs_path = f"/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs"
                         raw_jobs = pages(
                             jobs_path,
                             "jobs",
+                            page_size=25,
                         )
                         jobs_complete = page_completeness[jobs_path]
                     except Exception as exc:
-                        raw_jobs = []
-                        jobs_complete = False
-                        problem("jobs", identity, exc)
+                        try:
+                            raw_jobs, jobs_complete = fallback_jobs(
+                                repo, run_id, attempt
+                            )
+                            jobs_source = "all_jobs_filter_all"
+                        except Exception:
+                            raw_jobs = []
+                            jobs_complete = False
+                            problem("jobs", identity, exc)
                     jobs = [_normalize_job(job) for job in raw_jobs]
                     normalized = _normalize_run(
                         repo, run, jobs, release_runs.get((repo, run_id))
                     )
                     normalized["jobs_complete"] = jobs_complete
+                    normalized["jobs_source"] = jobs_source
                     normalized["observed_at"] = observed_at
                     store.ingest_run(normalized)
                     result["attempts"] += 1

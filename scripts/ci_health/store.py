@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+FAILURE_CONCLUSIONS = {"failure", "timed_out", "startup_failure", "action_required"}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -346,7 +348,7 @@ class HealthStore:
                 and r["run_attempt"] < run["run_attempt"]
             ]
             run["recovered"] = run.get("conclusion") == "success" and any(
-                r.get("conclusion") in {"failure", "timed_out"} for r in earlier
+                r.get("conclusion") in FAILURE_CONCLUSIONS for r in earlier
             )
             run["observed_attempts"] = len(earlier) + 1
             run["first_attempt_observed"] = run["run_attempt"] == 1 or any(
@@ -377,6 +379,9 @@ class HealthStore:
                 {"run_attempt": latest_test_attempt[(t["repo"], t["run_id"])]},
             )["run_attempt"]
         ]
+        # The bounded browser feed must keep actionable failures visible even
+        # when a large successful report was imported more recently.
+        tests.sort(key=lambda test: test["status"] not in {"fail", "error"})
         downstream_attempts = self._documents("downstream")
         downstream_latest: dict[tuple, dict] = {}
         for item in downstream_attempts:
@@ -475,10 +480,41 @@ class HealthStore:
         gaps.append(
             "Root cause, ownership, coverage percentages and performance require explicit source evidence."
         )
+        # Attempt history is a lightweight index. Full job/step observations
+        # remain durable in SQLite and current jobs stay on `runs`; repeating
+        # those trees here can multiply the browser payload by every rerun.
+        attempt_metadata = [
+            {
+                key: value
+                for key, value in attempt.items()
+                if key
+                in {
+                    "repo",
+                    "id",
+                    "run_attempt",
+                    "name",
+                    "event",
+                    "head_sha",
+                    "branch",
+                    "status",
+                    "conclusion",
+                    "created_at",
+                    "started_at",
+                    "updated_at",
+                    "completed_at",
+                    "observed_at",
+                    "html_url",
+                    "release_id",
+                    "jobs_complete",
+                    "last_known_jobs_observed_at",
+                }
+            }
+            for attempt in attempts
+        ]
         exported_lists = {
             "releases": releases,
             "runs": runs,
-            "run_attempts": attempts,
+            "run_attempts": attempt_metadata,
             "tests": tests,
             "test_attempts": all_tests,
             "downstream": list(downstream_latest.values()),
@@ -502,9 +538,7 @@ class HealthStore:
                 day, {"date": day, "runs": 0, "failed_runs": 0, "recovered_runs": 0}
             )
             bucket["runs"] += 1
-            bucket["failed_runs"] += int(
-                run.get("conclusion") in {"failure", "timed_out"}
-            )
+            bucket["failed_runs"] += int(run.get("conclusion") in FAILURE_CONCLUSIONS)
             bucket["recovered_runs"] += int(run["recovered"])
         last_green: dict[tuple, dict] = {}
         for release in releases:
@@ -526,7 +560,7 @@ class HealthStore:
                 "releases": len(releases),
                 "runs": len(runs),
                 "failed_runs": sum(
-                    r.get("conclusion") in {"failure", "timed_out"} for r in runs
+                    r.get("conclusion") in FAILURE_CONCLUSIONS for r in runs
                 ),
                 "running_runs": sum(
                     r.get("status")

@@ -39,7 +39,9 @@ coverage warnings. Workflow metadata is separately bounded by `days`,
 
 [`Publish CI health`](../../.github/workflows/ci_health.yml) runs every 30
 minutes on the fork's default branch and can also be dispatched manually. It
-reads and updates `health.sqlite` and `health.json` on `ci-health-data`.
+reads and updates `health.sqlite.gz` and `health.json` on `ci-health-data`.
+History is restored to local SQLite before collection and atomically compressed
+afterwards. The first run migrates an existing uncompressed state file.
 The default branch must contain this workflow; scheduled Actions may be delayed.
 Collection and downstream imports share a concurrency group to prevent lost
 updates. Bootstrap `ci-health-data` with a local collection before enabling it.
@@ -53,7 +55,7 @@ https://raw.githubusercontent.com/sa-faizal/Quartz/ci-health-data/health.json
 ```
 
 Only configure public evidence in this public fork. Both the exported feed and
-its SQLite history are public. No email, credentials, full logs, environment
+its compressed SQLite history are public. No email, credentials, full logs, environment
 variables or private-repository content belong in the feed.
 
 ## Test case evidence
@@ -152,5 +154,10 @@ python scripts/ci_health/cli.py --db health-state/health.sqlite ingest-downstrea
   `collection` and `gaps`. Browser refresh does not make old evidence fresh.
 - SQLite snapshots preserve collected history, not history from before collection.
   Over time its size grows; archive/rotate state according to retention needs.
+- The browser feed limits each detail list to `export_limit` (default 200).
+  Attempt history in the feed contains metadata; full historical job details
+  remain in SQLite. Truncation and total counts are explicit, and failing test
+  evidence takes precedence over passing cases. The JSON is compact to reduce
+  browser transfer size.
 
 Run the full existing and new test suites with `python -m pytest scripts docs`.

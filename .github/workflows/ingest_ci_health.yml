@@ -36,6 +36,8 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+      - name: Restore compressed evidence history
+        run: python scripts/ci_health/state_archive.py restore --directory health-state
       - name: Validate and import report
         env:
           REPORT_JSON: ${{ inputs.report_json }}
@@ -48,6 +50,8 @@ jobs:
           PY
           python scripts/ci_health/cli.py --db health-state/health.sqlite ingest-downstream \
             --report health-state/incoming.json --output health-state/health.json
+      - name: Archive evidence history
+        run: python scripts/ci_health/state_archive.py archive --directory health-state
       - name: Publish updated Quartz feed
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,7 +60,10 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add health.sqlite health.json
+          git add health.sqlite.gz health.json
+          if git ls-files --error-unmatch health.sqlite >/dev/null 2>&1; then
+            git rm --cached health.sqlite
+          fi
           if ! git diff --cached --quiet; then
             git commit -m 'Import downstream CI health observation'
             gh auth setup-git
