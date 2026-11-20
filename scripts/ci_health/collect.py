@@ -407,13 +407,13 @@ def collect(
 
     page_completeness = {}
 
-    def pages(path, field, *, cap=None):
+    def pages(path, field, *, cap=None, page_size=100):
         page_completeness[path] = True
         values = []
         page = 1
         while page <= 100:
             separator = "&" if "?" in path else "?"
-            response = get(f"{path}{separator}per_page=100&page={page}")
+            response = get(f"{path}{separator}per_page={page_size}&page={page}")
             batch = response.get(field)
             if not isinstance(batch, list):
                 raise CollectionError(f"Missing {field} array")
@@ -428,7 +428,10 @@ def collect(
                     problem("limit", path, warning=True)
                 return values
             values.extend(batch)
-            if len(batch) < 100:
+            total = response.get("total_count")
+            if type(total) is int and len(values) >= total:
+                return values
+            if len(batch) < page_size:
                 return values
             page += 1
         page_completeness[path] = False
@@ -490,7 +493,7 @@ def collect(
         path = f"/repos/{repo}/actions/runs/{run_id}/jobs?filter=all"
         if key not in all_jobs_cache:
             try:
-                jobs = pages(path, "jobs")
+                jobs = pages(path, "jobs", page_size=25)
                 all_jobs_cache[key] = (jobs, page_completeness[path], None)
             except Exception as exc:
                 all_jobs_cache[key] = ([], False, exc)
@@ -572,6 +575,7 @@ def collect(
                         raw_jobs = pages(
                             jobs_path,
                             "jobs",
+                            page_size=25,
                         )
                         jobs_complete = page_completeness[jobs_path]
                     except Exception as exc:

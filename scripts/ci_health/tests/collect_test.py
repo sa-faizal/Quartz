@@ -5,6 +5,7 @@ import io
 import sys
 import zipfile
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -58,12 +59,12 @@ def test_paginated_jobs_and_exact_attempt_history():
     class Client:
         def get(self, path):
             if "/jobs?" in path:
-                if "page=2" in path:
+                if parse_qs(urlsplit(path).query)["page"] == ["2"]:
                     return {"jobs": [{"id": 101, "name": "last"}]}
                 return {
                     "jobs": [
                         {"id": i, "name": f"job{i}", "conclusion": "success"}
-                        for i in range(100)
+                        for i in range(25)
                     ]
                 }
             if "/attempts/1" in path:
@@ -75,11 +76,47 @@ def test_paginated_jobs_and_exact_attempt_history():
         store, repos=["ROCm/TheRock"], release_sources=[], now=NOW, client=Client()
     )
     assert outcome["status"] == "success"
-    assert outcome["jobs"] == 202
+    assert outcome["jobs"] == 52
     assert [record["run_attempt"] for record in store.runs] == [1, 2]
     assert [record["conclusion"] for record in store.runs] == ["failure", "success"]
     assert store.runs[1]["event"] == "pull_request"
     assert store.runs[1]["completed_at"] == "2026-11-19T02:00:00Z"
+
+
+@pytest.mark.parametrize("total", [100, 103])
+@pytest.mark.parametrize("fallback", [False, True])
+def test_job_page_size_25_recovers_large_run_and_stops_at_total(total, fallback):
+    class Client:
+        def __init__(self):
+            self.job_pages = []
+
+        def get(self, path):
+            if "/jobs?" in path:
+                if fallback and "filter=all" not in path:
+                    raise CollectionError("GitHub HTTP 502")
+                query = parse_qs(urlsplit(path).query)
+                assert query["per_page"] == ["25"]
+                page = int(query["page"][0])
+                self.job_pages.append(page)
+                begin = (page - 1) * 25
+                return {
+                    "total_count": total,
+                    "jobs": [
+                        {"id": i, "run_id": 10, "run_attempt": 1}
+                        for i in range(begin, min(begin + 25, total))
+                    ],
+                }
+            return {"workflow_runs": [run()], "total_count": 1}
+
+    client = Client()
+    store = Store()
+    outcome = collect(
+        store, repos=["ROCm/rockrel"], release_sources=[], now=NOW, client=client
+    )
+    assert outcome["status"] == "success"
+    assert len(store.runs[0]["jobs"]) == total
+    assert store.runs[0]["jobs_complete"] is True
+    assert client.job_pages == list(range(1, (total + 24) // 25 + 1))
 
 
 def test_502_attempt_jobs_fallback_is_cached_and_never_mixes_attempts():
@@ -131,12 +168,12 @@ def test_jobs_fallback_paginates_all_attempts():
     class Client:
         def get(self, path):
             if "jobs?filter=all" in path:
-                if "page=2" in path:
+                if parse_qs(urlsplit(path).query)["page"] == ["2"]:
                     return {"jobs": [{"id": 100, "run_id": 10, "run_attempt": 1}]}
                 return {
                     "jobs": [
                         {"id": i, "run_id": 10, "run_attempt": (i % 2) + 1}
-                        for i in range(100)
+                        for i in range(25)
                     ]
                 }
             if "/jobs?" in path:
@@ -148,7 +185,7 @@ def test_jobs_fallback_paginates_all_attempts():
         store, repos=["ROCm/rockrel"], release_sources=[], now=NOW, client=Client()
     )
     assert outcome["status"] == "success"
-    assert len(store.runs[0]["jobs"]) == 51
+    assert len(store.runs[0]["jobs"]) == 14
     assert store.runs[0]["jobs_complete"] is True
 
 
@@ -188,7 +225,7 @@ def test_jobs_fallback_request_budget_and_failed_cache_are_bounded():
                 self.all_job_calls += 1
                 return {
                     "jobs": [
-                        {"id": i, "run_id": 10, "run_attempt": 1} for i in range(100)
+                        {"id": i, "run_id": 10, "run_attempt": 1} for i in range(25)
                     ]
                 }
             if "/jobs?" in path:
@@ -288,7 +325,7 @@ def test_job_pagination_limit_is_not_reported_as_complete():
     class Client:
         def get(self, path):
             if "/jobs?" in path:
-                return {"jobs": [{"id": i, "name": "job"} for i in range(100)]}
+                return {"jobs": [{"id": i, "name": "job"} for i in range(25)]}
             return {"workflow_runs": [run()]}
 
     store = Store()
