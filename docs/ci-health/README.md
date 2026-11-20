@@ -152,5 +152,10 @@ python scripts/ci_health/cli.py --db health-state/health.sqlite ingest-downstrea
   `collection` and `gaps`. Browser refresh does not make old evidence fresh.
 - SQLite snapshots preserve collected history, not history from before collection.
   Over time its size grows; archive/rotate state according to retention needs.
+- The browser feed limits each detail list to `export_limit` (default 200).
+  Attempt history in the feed contains metadata; full historical job details
+  remain in SQLite. Truncation and total counts are explicit, and failing test
+  evidence takes precedence over passing cases. The JSON is compact to reduce
+  browser transfer size.
 
 Run the full existing and new test suites with `python -m pytest scripts docs`.

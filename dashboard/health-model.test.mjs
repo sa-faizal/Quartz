@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sourceURL, evidenceURL, outcome, normalizeFeed, latestRuns, filterRuns, dailyOutcomes, effectiveFreshness, duration } from "./health-model.mjs";
+import { sourceURL, evidenceURL, outcome, normalizeFeed, latestRuns, filterRuns, dailyOutcomes, effectiveFreshness, duration, flattenReleasePipelines, releaseEvidenceURL, variantLabel, regressionLabel, healthCounts } from "./health-model.mjs";
 
 test("only HTTPS and local preview sources are accepted; credentials are rejected", () => {
   assert.equal(sourceURL("./health.json", "https://quartz.example/dashboard/"), "https://quartz.example/dashboard/health.json");
@@ -51,4 +51,59 @@ test("freshness ages after publication, and explicitly missing/stale data stays 
 test("normalized in-progress outcomes retain their meaning when rendered as badges", () => {
   assert.equal(outcome({ status: "in_progress" }), "running");
   assert.equal(outcome({ status: outcome({ status: "queued" }) }), "running");
+});
+
+test("release evidence expands variants without duplicate rollups and preserves inherited provenance", () => {
+  const pipelines = {
+    pytorch: {
+      test: { linux: { gfx942: { status: "failure", run_id: 101, run_attempt: 2, variants: [
+        { py: "3.12", torch: "nightly", status: "success" },
+        { py: "3.13", torch: "release/2.10", status: "failure", run_id: 102, run_attempt: 3 },
+      ] } } },
+      build: { windows: { status: "success", run_id: 103, run_attempt: 1 } },
+    },
+    native_packages: { rpm: { status: "success", run_id: 104, run_attempt: 1 } },
+  };
+  const rows = flattenReleasePipelines(pipelines, [{ repo: "ROCm/TheRock", id: 102, run_attempt: 3, html_url: "https://github.com/ROCm/TheRock/actions/runs/102" }]);
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows[0].variants, { py: "3.12", torch: "nightly" });
+  assert.equal(rows[0].run_id, 101);
+  assert.equal(rows[0].run_attempt, 2);
+  assert.equal(rows[0].arch, "gfx942");
+  assert.equal(rows[0].platform, "linux");
+  assert.equal(rows[0].html_url, "https://github.com/ROCm/rockrel/actions/runs/101/attempts/2");
+  assert.equal(rows[1].html_url, "https://github.com/ROCm/TheRock/actions/runs/102/attempts/3");
+  assert.equal(rows[2].arch, "");
+  assert.equal(rows[2].platform, "windows");
+  assert.equal(rows[3].pipeline, "native_packages");
+  assert.equal(rows[3].platform, "linux");
+  assert.equal(variantLabel(rows[1].variants), "Python 3.13 · PyTorch release/2.10");
+});
+
+test("empty variant detail does not pretend that an aggregate is an individual matrix entry", () => {
+  assert.deepEqual(flattenReleasePipelines({ pytorch: { build: { linux: { status: "in_progress", variants: [] } } } }), []);
+});
+
+test("workflow evidence uses exact attempts and rejects unsafe repository/source strings", () => {
+  assert.equal(releaseEvidenceURL(77, 3, "ROCm/Quartz", "https://github.com/ROCm/Quartz/actions/runs/77/attempts/1"), "https://github.com/ROCm/Quartz/actions/runs/77/attempts/3");
+  assert.equal(releaseEvidenceURL(77, 2, "ROCm/Quartz", "javascript:alert(1)"), "https://github.com/ROCm/Quartz/actions/runs/77/attempts/2");
+  assert.equal(releaseEvidenceURL(77, 1, "evil.example/a/b"), null);
+  assert.equal(releaseEvidenceURL("not-a-run", 1, "ROCm/Quartz"), null);
+  assert.equal(flattenReleasePipelines({ rocm: { build: { linux: { status: "success", run_id: 9 } } } }, [], "Example/Release")[0].html_url, "https://github.com/Example/Release/actions/runs/9");
+});
+
+test("regressions describe dimensions and version pairs in readable words", () => {
+  assert.equal(regressionLabel({ dimension: 'pytorch / test / linux / gfx942 / {"py":"3.12","torch":"release/2.10"}', previous: "success", current: "failure" }), "PyTorch · test · Linux · gfx942 · Python 3.12 · PyTorch release/2.10: passed to failed");
+});
+
+test("durable summary totals take precedence over truncated detail lists, including explicit zeros", () => {
+  const feed = { summary: { runs: 500, failed_runs: 300, running_runs: 20, recovered_runs: 0, test_cases: 1000, failed_tests: 300 }, runs: [{ repo: "ROCm/TheRock", id: 1, status: "completed", conclusion: "success", recovered: true }], tests: [{ status: "fail" }], export_limits: { truncated_lists: { runs: 500, tests: 1000 }, max_records_per_list: 200 } };
+  const counts = healthCounts(feed);
+  assert.equal(counts.runs, 500);
+  assert.equal(counts.failed_runs, 300);
+  assert.equal(counts.running_runs, 20);
+  assert.equal(counts.recovered_runs, 0);
+  assert.equal(counts.test_cases, 1000);
+  assert.equal(counts.failed_tests, 300);
+  assert.equal(healthCounts({ tests: [{ status: "fail" }], summary: { test_cases: null, failed_tests: -3 } }).failed_tests, 1);
 });

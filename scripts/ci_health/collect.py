@@ -327,6 +327,7 @@ def collect(
         "errors": [],
         "warnings": [],
         "repos": list(repos),
+        "release_repo": release_repo,
         "window_days": days,
         "window_basis": "workflow run creation time",
         "max_runs_per_repo": max_runs,

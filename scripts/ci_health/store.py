@@ -377,6 +377,9 @@ class HealthStore:
                 {"run_attempt": latest_test_attempt[(t["repo"], t["run_id"])]},
             )["run_attempt"]
         ]
+        # The bounded browser feed must keep actionable failures visible even
+        # when a large successful report was imported more recently.
+        tests.sort(key=lambda test: test["status"] not in {"fail", "error"})
         downstream_attempts = self._documents("downstream")
         downstream_latest: dict[tuple, dict] = {}
         for item in downstream_attempts:
@@ -475,10 +478,41 @@ class HealthStore:
         gaps.append(
             "Root cause, ownership, coverage percentages and performance require explicit source evidence."
         )
+        # Attempt history is a lightweight index. Full job/step observations
+        # remain durable in SQLite and current jobs stay on `runs`; repeating
+        # those trees here can multiply the browser payload by every rerun.
+        attempt_metadata = [
+            {
+                key: value
+                for key, value in attempt.items()
+                if key
+                in {
+                    "repo",
+                    "id",
+                    "run_attempt",
+                    "name",
+                    "event",
+                    "head_sha",
+                    "branch",
+                    "status",
+                    "conclusion",
+                    "created_at",
+                    "started_at",
+                    "updated_at",
+                    "completed_at",
+                    "observed_at",
+                    "html_url",
+                    "release_id",
+                    "jobs_complete",
+                    "last_known_jobs_observed_at",
+                }
+            }
+            for attempt in attempts
+        ]
         exported_lists = {
             "releases": releases,
             "runs": runs,
-            "run_attempts": attempts,
+            "run_attempts": attempt_metadata,
             "tests": tests,
             "test_attempts": all_tests,
             "downstream": list(downstream_latest.values()),

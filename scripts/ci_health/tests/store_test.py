@@ -270,3 +270,62 @@ def test_failed_job_refresh_preserves_previous_details_as_historical_only():
         current = store.export()["runs"][0]
         assert current["jobs"][0]["id"] == 8
         assert "last_known_jobs" not in current
+
+
+def test_exported_attempt_history_is_metadata_only_without_losing_stored_jobs():
+    with HealthStore(":memory:") as store:
+        for attempt in (1, 2):
+            store.ingest_run(
+                {
+                    **run(attempt, "failure" if attempt == 1 else "success"),
+                    "html_url": "https://github.com/ROCm/TheRock/actions/runs/100",
+                    "jobs": [{"id": attempt, "steps": [{"name": "large detail"}]}],
+                    "last_known_jobs": [{"id": 99}],
+                    "steps": [{"name": "legacy"}],
+                }
+            )
+        exported = store.export()
+        assert len(exported["run_attempts"]) == 2
+        for attempt in exported["run_attempts"]:
+            assert {
+                "repo",
+                "id",
+                "run_attempt",
+                "conclusion",
+                "created_at",
+                "html_url",
+            } <= attempt.keys()
+            assert "jobs" not in attempt
+            assert "last_known_jobs" not in attempt
+            assert "steps" not in attempt
+        assert exported["runs"][0]["jobs"][0]["id"] == 2
+        retained = store.connection.execute(
+            "SELECT document FROM runs WHERE attempt = 1"
+        ).fetchone()[0]
+        assert '"large detail"' in retained
+        assert exported["summary"]["recovered_runs"] == 1
+        assert exported["coverage"]["run_attempts_observed"] == 2
+
+
+def test_bounded_current_tests_show_failures_and_errors_before_passes():
+    with HealthStore(":memory:") as store:
+        cases = []
+        for index, status in enumerate(("error", "fail", "pass", "skipped")):
+            cases.append(
+                {
+                    "repo": "ROCm/TheRock",
+                    "run_id": 1,
+                    "run_attempt": 1,
+                    "suite": "hip",
+                    "name": f"case{index}",
+                    "status": status,
+                    "observed_at": f"2026-11-19T0{index}:00:00Z",
+                }
+            )
+        store.ingest_tests(cases)
+        bounded = store.export(max_records=2)
+        assert {case["status"] for case in bounded["tests"]} == {"error", "fail"}
+        assert bounded["summary"]["test_cases"] == 4
+        assert bounded["summary"]["failed_tests"] == 2
+        assert bounded["export_limits"]["truncated_lists"]["tests"] == 4
+        assert len(store.export()["tests"]) == 4

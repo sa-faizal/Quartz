@@ -1,6 +1,6 @@
 // Copyright Advanced Micro Devices, Inc.
 // SPDX-License-Identifier: MIT
-import { DEFAULT_SOURCE, sourceURL, evidenceURL, outcome, normalizeFeed, filterRuns, dailyOutcomes, relativeAge, effectiveFreshness, duration } from "./health-model.mjs";
+import { DEFAULT_SOURCE, sourceURL, evidenceURL, outcome, normalizeFeed, filterRuns, dailyOutcomes, relativeAge, effectiveFreshness, duration, flattenReleasePipelines, variantLabel, regressionLabel, healthCounts } from "./health-model.mjs";
 
 const $ = (id) => document.getElementById(id);
 const labels = { success: "Passed", failure: "Failed", running: "In progress", cancelled: "Cancelled", skipped: "Skipped", neutral: "Neutral", unknown: "Not reported", recovered: "Recovered on retry" };
@@ -60,26 +60,25 @@ function renderFreshness() {
 }
 
 function renderOverview() {
-  const runs = feed.currentRuns;
-  const failed = runs.filter((run) => outcome(run) === "failure").length;
-  const running = runs.filter((run) => outcome(run) === "running").length;
-  const recovered = runs.filter((run) => run.recovered).length;
+  const counts = healthCounts(feed);
+  const failed = counts.failed_runs;
+  const running = counts.running_runs;
+  const recovered = counts.recovered_runs;
   const builds = feed.releases.flatMap((release) => release.platforms || []);
   const buildReady = builds.filter((platform) => outcome({ status: platform.build_status }) === "success").length;
-  const failures = feed.tests.filter((test) => ["fail", "failure", "error"].includes(test.status));
   replace("metrics",
-    metric("ROCm builds available", builds.length ? number(buildReady) : "—", builds.length ? `of ${number(builds.length)} release/platform records` : "No release builds collected", "positive"),
-    metric("Failed workflow runs", number(failed), `${number(runs.length)} runs · latest attempts`, failed ? "danger" : ""),
+    metric("ROCm builds available", builds.length ? number(buildReady) : "—", builds.length ? `of ${number(builds.length)} ${feed.export_limits?.truncated_lists?.releases ? "exported " : ""}release/platform records` : "No release builds collected", "positive"),
+    metric("Failed workflow runs", number(failed), `${number(counts.runs)} collected runs · latest attempts`, failed ? "danger" : ""),
     metric("Work in progress", number(running), "Queued or executing workflows", "neutral"),
     metric("Recovered on retry", number(recovered), "Earlier failure observed · not proof of flakiness", "neutral"),
-    metric("Failing test cases", feed.tests.length ? number(failures.length) : "—", feed.tests.length ? `${number(feed.tests.length)} reported JUnit cases` : "Individual test evidence not collected", failures.length ? "danger" : ""));
+    metric("Failing test cases", counts.test_cases ? number(counts.failed_tests) : "—", counts.test_cases ? `${number(counts.test_cases)} reported JUnit cases` : "Individual test evidence not collected", counts.failed_tests ? "danger" : ""));
   renderTrend();
   const attention = [];
   if (failed) attention.push(attentionItem(number(failed), "Workflow runs need triage", "Expand a failed run to see its jobs and source evidence.", "#workflow-runs"));
-  if (failures.length) attention.push(attentionItem(number(failures.length), "Individual test failures have evidence", "Review the collected assertion or error messages.", "#test-evidence"));
+  if (counts.failed_tests) attention.push(attentionItem(number(counts.failed_tests), "Individual test failures have evidence", "Review exported assertions or source reports; detail exports can be bounded.", "#test-evidence"));
   const failedPlatforms = builds.filter((platform) => Object.values(platform.test_counts || {}).some((value) => Number(value) > 0) && Number(platform.test_counts?.failure) > 0);
   if (failedPlatforms.length) attention.push(attentionItem(number(failedPlatforms.length), "Release platforms have ROCm validation failures", "A successful build can still have failing tests.", "#releases"));
-  if (!feed.tests.length) attention.push(attentionItem("—", "Individual test evidence is missing", "Matrix pass counts do not establish individual test-case health.", "#coverage"));
+  if (!counts.test_cases) attention.push(attentionItem("—", "Individual test evidence is missing", "Matrix pass counts do not establish individual test-case health.", "#coverage"));
   if (!attention.length) attention.push(empty("No failing evidence in this collection", "This describes the collected window. Check coverage before drawing a broader health conclusion.", true));
   replace("attention", ...attention.slice(0, 3));
 }
@@ -115,11 +114,12 @@ function renderTrend() {
     append(column, bars, node("span", "chart-label", displayed.length <= 14 || index % 4 === 0 || index === displayed.length - 1 ? day.date.slice(5) : ""));
     chart.append(column);
   }
-  replace("trend-chart", chart, node("div", "chart-caption", `UTC creation dates · ${displayed[0].date} to ${displayed.at(-1).date} · omitted dates mean no collected records, not zero CI activity`));
+  const limitNote = healthCounts(feed).runs > feed.currentRuns.length ? ` · chart covers ${number(feed.currentRuns.length)} exported run details of ${number(healthCounts(feed).runs)} collected runs` : "";
+  replace("trend-chart", chart, node("div", "chart-caption", `UTC creation dates · ${displayed[0].date} to ${displayed.at(-1).date}${limitNote} · omitted dates mean no exported records, not zero CI activity`));
 }
 
 function renderReleases() {
-  $("release-count").textContent = `${number(feed.releases.length)} collected releases`;
+  $("release-count").textContent = feed.releases.length < healthCounts(feed).releases ? `${number(feed.releases.length)} exported of ${number(healthCounts(feed).releases)} collected releases` : `${number(feed.releases.length)} collected releases`;
   if (!feed.releases.length) {
     replace("release-list", append(node("div", "panel"), empty("No release status collected", "Configure Quartz release sources in the collector. Workflow results can still appear below.")));
     return;
@@ -154,12 +154,61 @@ function renderReleases() {
     }
     if (!platforms.childNodes.length) platforms.append(empty("Platform data not reported", "The release may still be initializing.", true));
     append(card, top, platforms);
-    if (release.regressions?.length) card.append(node("div", "release-regressions", `New failures versus comparable release: ${release.regressions.map(objectText).join(" · ")}`));
+    if (release.regressions?.length) {
+      const regressions = append(node("div", "release-regressions"), node("strong", "", "New failures versus the previous comparable release"));
+      const items = node("ul");
+      for (const regression of release.regressions) items.append(node("li", "", regressionLabel(regression)));
+      card.append(append(regressions, items));
+    }
+    card.append(releaseEvidence(release));
     card.append(node("p", "section-note release-footnote", `Source updated ${timestamp(release.source_updated_at)} · collected ${timestamp(release.observed_at)}`));
     return card;
   });
-  replace("release-list", ...cards);
+  replace("release-list", lastGreen(releases), ...cards);
   if (releases.length > visibleReleases) $("release-list").append(moreButton(`Show more releases (${releases.length - visibleReleases} remaining)`, () => { visibleReleases += 8; renderReleases(); }));
+}
+function lastGreen(releases) {
+  const section = node("div", "last-green-grid");
+  const streams = new Map();
+  for (const release of releases) {
+    const key = JSON.stringify([release.release_type, release.build_variant]);
+    if (!streams.has(key)) streams.set(key, release);
+  }
+  for (const stream of streams.values()) {
+    const green = (feed.last_green || []).find((entry) => entry.release_type === stream.release_type && entry.build_variant === stream.build_variant);
+    const card = append(node("article", "last-green-card"), node("div", "metric-label", `${stream.release_type || "Unknown stream"} · ${stream.build_variant || "Variant not reported"}`), node("strong", "", "Last fully green in collected history"));
+    const matchingRelease = green ? releases.find((entry) => entry.id === green.release_id) : null;
+    if (green) append(card, link(green.rocm_version || "Passing release", matchingRelease?.source), node("span", "cell-secondary", `Build ${green.build_date || "date not reported"}`));
+    else card.append(node("span", "last-green-missing", feed.last_green ? "None observed" : "Last-green evidence not provided"));
+    section.append(card);
+  }
+  return section;
+}
+function releaseEvidence(release) {
+  const rows = flattenReleasePipelines(release.pipelines, feed.run_attempts || feed.runs, feed.collection?.release_repo || "ROCm/rockrel");
+  const details = node("details", "release-evidence");
+  const summary = append(node("summary"), node("span", "", "Architecture and framework evidence"), node("span", "scope-label", `${number(rows.length)} reported status entries`));
+  const content = node("div", "release-evidence-content");
+  append(details, summary, content);
+  let limit = 100;
+  let rendered = false;
+  function render() {
+    content.replaceChildren();
+    if (!rows.length) { content.append(empty("No detailed pipeline status has been reported", "Only the platform summaries above are available. Missing detail is not a passing result.", true)); return; }
+    content.append(node("p", "section-note", "Concrete pipeline status entries from Quartz. GPU and framework dimensions appear only when reported; platform-wide builds are not expanded into invented per-GPU results."));
+    content.append(makeTable(["Pipeline / phase", "Platform", "GPU architecture", "Python / framework", "Outcome", "Attempt", "Workflow evidence"], rows.slice(0, limit).map((row) => [
+      append(node("div"), node("strong", "", ({ rocm: "ROCm", pytorch: "PyTorch", jax: "JAX", native_packages: "Native packages" })[row.pipeline] || row.pipeline), node("div", "cell-secondary", row.phase.replaceAll("_", " "))),
+      row.platform || "Not reported",
+      node("span", "mono", row.arch || (row.phase === "build" || row.pipeline === "native_packages" ? "Platform-wide" : "Not reported")),
+      variantLabel(row.variants) || "No variant dimension",
+      badge(row.status),
+      row.run_attempt || "Not reported",
+      row.run_id ? append(node("div"), link(`Run ${row.run_id}`, row.html_url), node("div", "cell-secondary", row.repo || "Repository not reported")) : "Run not reported",
+    ])));
+    if (rows.length > limit) content.append(moreButton(`Show more status entries (${rows.length - limit} remaining)`, () => { limit += 100; render(); }));
+  }
+  details.addEventListener("toggle", () => { if (details.open && !rendered) { rendered = true; render(); } });
+  return details;
 }
 function matrixCell(counts, full) {
   const container = node("div");
@@ -183,7 +232,7 @@ function setOptions(id, values, placeholder) {
 }
 function renderRuns() {
   const runs = filterRuns(feed.currentRuns, { repo: $("repo-filter").value, state: $("outcome-filter").value, event: $("event-filter").value, search: $("search-filter").value });
-  $("run-count").textContent = `${number(runs.length)} of ${number(feed.currentRuns.length)} collected runs`;
+  $("run-count").textContent = healthCounts(feed).runs > feed.currentRuns.length ? `${number(runs.length)} matching · ${number(feed.currentRuns.length)} exported of ${number(healthCounts(feed).runs)} collected runs` : `${number(runs.length)} of ${number(feed.currentRuns.length)} collected runs`;
   if (!runs.length) { replace("run-list", empty("No matching workflow runs", feed.currentRuns.length ? "Try changing your filters." : "The Quartz collector has not published workflow-run evidence yet.")); return; }
   replace("run-list", ...runs.slice(0, visibleRuns).map(runRow));
   if (runs.length > visibleRuns) $("run-list").append(moreButton(`Show more runs (${runs.length - visibleRuns} remaining)`, () => { visibleRuns += 75; renderRuns(); }));
@@ -235,12 +284,14 @@ function moreButton(text, handler) { const button = node("button", "text-button 
 
 function renderTests() {
   const tests = feed.tests;
+  const counts = healthCounts(feed);
   const failures = tests.filter((test) => ["fail", "failure", "error"].includes(test.status));
-  $("test-count").textContent = tests.length ? `${number(tests.length)} reported cases` : "JUnit evidence unavailable";
+  $("test-count").textContent = counts.test_cases ? `${number(counts.test_cases)} reported cases${tests.length < counts.test_cases ? ` · ${number(tests.length)} exported details` : ""}` : "JUnit evidence unavailable";
   replace("test-summary");
-  if (!tests.length) { replace("test-list", empty("No individual test cases have been collected", "JUnit artifacts must be available and artifact collection enabled, or a test report must be ingested. Release matrix results above remain available.")); return; }
+  if (!tests.length) { replace("test-list", counts.test_cases ? empty("Individual test details are not included in this export", "The summary above includes the durable collection totals. Consult the Quartz store or source reports for complete case evidence.") : empty("No individual test cases have been collected", "JUnit artifacts must be available and artifact collection enabled, or a test report must be ingested. Release matrix results above remain available.")); return; }
+  if (counts.test_cases > tests.length) $("test-summary").append(node("span", "", "Exported details:"));
   for (const [label, count] of [["Passed", tests.filter((test) => ["pass", "success"].includes(test.status)).length], ["Failed / error", failures.length], ["Skipped", tests.filter((test) => test.status === "skipped").length]]) $("test-summary").append(append(node("span"), node("strong", "", number(count)), document.createTextNode(label)));
-  if (!failures.length) { replace("test-list", empty("No failures in the reported test cases", "This covers only the collected JUnit evidence. It is not a statement that every expected suite ran.")); return; }
+  if (!failures.length) { replace("test-list", counts.failed_tests ? empty("Failing cases exist outside these exported details", "The summary includes failures in the durable collection. Consult the Quartz store or source reports for their case details.") : empty("No failures in the reported test cases", "This covers only the collected JUnit evidence. It is not a statement that every expected suite ran.")); return; }
   const cases = failures.slice(0, 200).map((test) => {
     const details = node("details", "test-case");
     const text = append(node("div"), node("div", "test-name", `${test.classname ? `${test.classname}.` : ""}${test.name || "Unnamed case"}`), node("div", "test-context", `${test.suite || "Suite unavailable"} · ${test.repo || "Repository unavailable"} · run ${test.run_id || "?"} / attempt ${test.run_attempt || 1}${test.arch ? ` · ${test.arch}` : ""}`));
@@ -266,6 +317,7 @@ function renderCoverage() {
   for (const [title, value] of [["Feed generated", timestamp(feed.generated_at)], ["Most recent observation", timestamp(feed.freshness?.latest_observed_at)], ["Collection outcome", collection.status || "Not reported"]]) append(stats, append(node("dl"), node("dt", "", title), node("dd", "", value)));
   const list = node("ul", "coverage-list");
   const gaps = [...feed.gaps];
+  for (const [name, total] of Object.entries(feed.export_limits?.truncated_lists || {})) gaps.push(`${name.replaceAll("_", " ")}: the feed includes at most ${number(feed.export_limits.max_records_per_list)} details from ${number(total)} durable records. Summary counters retain the full collection totals.`);
   if (!gaps.length) gaps.push("No explicit coverage limitations were supplied. This does not imply complete CI coverage.");
   gaps.push("Release validation counters describe matrix entries; JUnit results describe individual cases. These denominators are kept separate.");
   gaps.push("Retry recovery requires an observed failed attempt followed by success. It does not by itself identify flaky tests or their cause.");
